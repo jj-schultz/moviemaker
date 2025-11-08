@@ -8,7 +8,7 @@ from typing import List, Optional
 
 import numpy as np
 from PIL import Image
-from moviepy import ImageSequenceClip, AudioFileClip
+from moviepy import ImageSequenceClip, AudioFileClip, VideoFileClip, ImageClip, concatenate_videoclips, ColorClip, CompositeVideoClip
 from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO)
@@ -214,18 +214,27 @@ def derive_anchor_times(
 
 
 def get_image_files(images_dir):
-    """Get all PNG/JPG image files sorted chronologically"""
+    """Get all PNG/JPG image files and video files sorted chronologically"""
     image_extensions = ['*.png', '*.jpg', '*.jpeg']
-    image_files = []
+    video_extensions = ['*.mov', '*.mp4', '*.avi', '*.mkv']
+    media_files = []
     
+    # Get image files
     for extension in image_extensions:
         pattern = os.path.join(images_dir, extension)
-        image_files.extend(glob.glob(pattern))
+        media_files.extend(glob.glob(pattern))
+    
+    # Get video files
+    for extension in video_extensions:
+        pattern = os.path.join(images_dir, extension)
+        media_files.extend(glob.glob(pattern))
     
     # Sort by modification time (chronological order)
-    image_files.sort(key=os.path.getmtime)
-    logger.info(f"Found {len(image_files)} image files in {images_dir}")
-    return image_files
+    media_files.sort(key=os.path.getmtime)
+    image_count = sum(1 for f in media_files if any(f.lower().endswith(ext[1:]) for ext in image_extensions))
+    video_count = len(media_files) - image_count
+    logger.info(f"Found {len(media_files)} media files in {images_dir} ({image_count} images, {video_count} videos)")
+    return media_files
 
 
 def get_special_images(images_long, first_override=None, last_override=None):
@@ -602,6 +611,91 @@ def create_movie_sequence(images_short, images_long, audio_duration,
     return final_images, final_durations
 
 
+def is_video_file(file_path):
+    """Check if a file is a video file based on its extension"""
+    video_extensions = ['.mov', '.mp4', '.avi', '.mkv']
+    return any(file_path.lower().endswith(ext) for ext in video_extensions)
+
+
+def process_video_clip(video_path, duration, target_size=(1920, 1080)):
+    """Process video file by extracting the first 'duration' seconds and stripping audio"""
+    import sys
+    import contextlib
+    from io import StringIO
+    
+    original_clip = None
+    try:
+        # Suppress "Proc not detected" output from MoviePy
+        with contextlib.redirect_stdout(StringIO()):
+            # Load video clip
+            original_clip = VideoFileClip(video_path)
+        
+        # Extract 'duration' seconds from the middle of the video
+        video_clip = original_clip
+        if original_clip.duration > duration:
+            # Calculate the start time to extract from the middle
+            start_time = (original_clip.duration - duration) / 2
+            end_time = start_time + duration
+            video_clip = original_clip.subclipped(start_time, end_time)
+            logger.debug(f"Extracted {duration:.2f}s from middle of {video_path} (t={start_time:.2f}s to {end_time:.2f}s)")
+        
+        # Strip audio
+        video_clip = video_clip.without_audio()
+        
+        # Resize while maintaining aspect ratio (like resize_image_to_standard does)
+        video_width, video_height = video_clip.size
+        target_width, target_height = target_size
+        
+        # Calculate scaling to fit within target size while maintaining aspect ratio
+        video_ratio = video_width / video_height
+        target_ratio = target_width / target_height
+        
+        if video_ratio > target_ratio:
+            # Video is wider, fit by width
+            new_width = target_width
+            new_height = int(new_width / video_ratio)
+        else:
+            # Video is taller, fit by height
+            new_height = target_height
+            new_width = int(new_height * video_ratio)
+        
+        # Resize the video to the calculated dimensions
+        resized_clip = video_clip.resized((new_width, new_height))
+        
+        # Add black borders to center the video in the target frame size
+        if new_width != target_width or new_height != target_height:
+            # Create black background
+            background = ColorClip(size=target_size, color=(0, 0, 0), duration=resized_clip.duration)
+            
+            # Calculate position to center the video
+            x_offset = (target_width - new_width) // 2
+            y_offset = (target_height - new_height) // 2
+            
+            # Composite the video on the black background
+            final_clip = CompositeVideoClip([
+                background,
+                resized_clip.with_position((x_offset, y_offset))
+            ])
+            
+            # Close intermediate clips
+            background.close()
+            resized_clip.close()
+        else:
+            final_clip = resized_clip
+        
+        # Close the video_clip if it's different from original_clip (i.e., if it was subclipped)
+        if video_clip != original_clip:
+            video_clip.close()
+            
+        return final_clip
+        
+    except Exception as e:
+        if original_clip:
+            original_clip.close()
+        logger.exception(f"Error processing video {video_path}")
+        raise
+
+
 def resize_image_to_standard(image_path, target_size=(1920, 1080)):
     """Resize image to standard video dimensions while maintaining aspect ratio"""
     try:
@@ -746,26 +840,42 @@ def create_movie(
             last_image_override=last_override,
         )
         
-        # Process images with progress bar
-        logger.info("Processing images...")
-        processed_images = []
-        for img_path in tqdm(final_image_files, desc="Processing images"):
-            processed_img = resize_image_to_standard(img_path)
-            processed_images.append(processed_img)
+        # Process media files (images and videos) with progress bar
+        logger.info("Processing media files...")
+        processed_clips = []
+        for i, (media_path, duration) in enumerate(tqdm(zip(final_image_files, durations), desc="Processing media")):
+            if is_video_file(media_path):
+                # Process video file - extract first portion and strip audio
+                video_clip = process_video_clip(media_path, duration)
+                processed_clips.append(video_clip)
+                logger.debug(f"Processed video {media_path} for {duration:.2f}s")
+            else:
+                # Process image file
+                processed_img = resize_image_to_standard(media_path)
+                # Create ImageClip with specified duration - suppress MoviePy output
+                import contextlib
+                from io import StringIO
+                with contextlib.redirect_stdout(StringIO()):
+                    image_clip = ImageClip(processed_img).with_duration(duration)
+                processed_clips.append(image_clip)
+                logger.debug(f"Processed image {media_path} for {duration:.2f}s")
         
-        # Create video clip from images
+        # Create video clip by concatenating all clips - suppress MoviePy output
         logger.info("Creating video clip...")
-        video_clip = ImageSequenceClip(processed_images, durations=durations)
+        import contextlib
+        from io import StringIO
+        with contextlib.redirect_stdout(StringIO()):
+            video_clip = concatenate_videoclips(processed_clips)
+            
+            # Trim video to match audio duration exactly
+            if video_clip.duration > audio_duration:
+                video_clip = video_clip.subclipped(0, audio_duration)
+            
+            # Combine video and audio
+            logger.info("Combining video and audio...")
+            final_clip = video_clip.with_audio(audio_clip)
         
-        # Trim video to match audio duration exactly
-        if video_clip.duration > audio_duration:
-            video_clip = video_clip.subclipped(0, audio_duration)
-        
-        # Combine video and audio
-        logger.info("Combining video and audio...")
-        final_clip = video_clip.with_audio(audio_clip)
-        
-        # Write the final movie
+        # Write the final movie (keep normal output for progress)
         logger.info(f"Writing movie to {output_path}...")
         final_clip.write_videofile(
             output_path,
@@ -780,6 +890,10 @@ def create_movie(
         audio_clip.close()
         video_clip.close()
         final_clip.close()
+        
+        # Clean up individual clips
+        for clip in processed_clips:
+            clip.close()
         
         logger.info(f"Movie created successfully: {output_path}")
     

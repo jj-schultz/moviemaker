@@ -1,11 +1,11 @@
-# MovieMaker Owner's Manual
+# MontageMaker Owner's Manual
 
-## What is MovieMaker?
-MovieMaker turns a folder of photos and one soundtrack into a polished video without any video-editing experience. It automatically resizes every image to full HD, keeps special intro/outro shots in place, and syncs your "long" hero images to the beat so dramatic moments land where the music hits. Short filler images are evenly spaced between those anchors, so the whole slideshow feels intentional rather than random. Point the tool at your folders and you get a 24 fps MP4 with clean audio and professional pacing.
+## What is MontageMaker?
+MontageMaker turns a folder of photos and one soundtrack into a polished video without any video-editing experience. It automatically resizes every image to full HD, keeps special intro/outro shots in place, and syncs your "long" hero images to the beat so dramatic moments land where the music hits. Short filler images are evenly spaced between those anchors, so the whole slideshow feels intentional rather than random. Point the tool at your folders and you get a 24 fps MP4 with clean audio and professional pacing.
 
-## Sounds awesome!! - How do I use MovieMaker?
+## Sounds awesome!! - How do I use MontageMaker?
 
-### Install MovieMaker on your computer
+### Install MontageMaker on your computer
 Follow these steps exactly once per computer. Replace paths as needed.
 
 1. **Download the project**
@@ -24,13 +24,13 @@ Follow these steps exactly once per computer. Replace paths as needed.
    pip install -r requirements.txt
    ```
    
-### Make a movie
+### Make a montage
 1. **Organize your assets**
-   - Place fast-cut images in `files/images_short/`
-   - Place spotlight images in `files/images_long/`
+   - Place fast-cut images/videos in `files/images_short/`
+   - Place spotlight images/videos in `files/images_long/`
    - Put the soundtrack at `files/audio.mp3`
    - Optional: add intro/outro frames by naming files `first.*` and `last.*` inside `files/images_long/`, or point to any other files on disk with `--first-image-path` / `--last-image-path`
-2. **Generate the movie** using the helper script (all options are optional):
+2. **Generate the montage** using the helper script (all options are optional):
    ```bash
    ./run_movie.sh \
      --images-short-dir ./files/images_short \
@@ -45,11 +45,11 @@ Follow these steps exactly once per computer. Replace paths as needed.
    The command prints progress bars while it resizes images, aligns beats (unless `--disable-beat-grid` is set), and finally writes the MP4 to the location you chose.
 
 ## Full Documentation
-Everything MovieMaker does is controlled by command-line switches. Use this section as a quick reference when you need to fine-tune pacing or troubleshoot a run.
+Everything MontageMaker does is controlled by command-line switches. Use this section as a quick reference when you need to fine-tune pacing or troubleshoot a run.
 
 ### Input & Output
-- **`--images-short-dir`** (default `./files/images_short`): Folder for quick-hit filler photos. Keep at least a few files here so gaps can be filled.
-- **`--images-long-dir`** (default `./files/images_long`): Folder for spotlight photos that should stay on screen longer and align with the beat.
+- **`--images-short-dir`** (default `./files/images_short`): Folder for quick-hit filler photos and videos. Keep at least a few files here so gaps can be filled. Videos are automatically trimmed to fit their assigned duration and have audio stripped.
+- **`--images-long-dir`** (default `./files/images_long`): Folder for spotlight photos and videos that should stay on screen longer and align with the beat. Videos are processed the same way as short videos.
 - **`--audio-path`** (default `./files/audio.mp3`): Background soundtrack in MP3 format. Length of this file sets the movie length.
 - **`--output-path`** (default `./output_movie.mp4`): Final MP4 destination. Use an absolute path if you want the file saved elsewhere.
 
@@ -112,6 +112,19 @@ Even if you never touch the code, you can verify everything is working before bu
    ```
 If a test fails, re-check your Python packages or asset folders, fix the issue, and re-run the same commands until they pass.
 
+## Supported File Formats
+### Images
+- PNG (.png)
+- JPEG (.jpg, .jpeg)
+
+### Videos
+- MOV (.mov) - Video files are automatically trimmed to fit their assigned duration and have audio stripped
+- MP4 (.mp4) - Same processing as MOV files
+- AVI (.avi) - Same processing as MOV files  
+- MKV (.mkv) - Same processing as MOV files
+
+**Note**: When using video files, MontageMaker extracts a segment from the middle of each video clip (up to the assigned duration for that slot in the sequence) and removes the audio track. This middle-extraction approach typically provides more representative content than using the beginning, which often contains titles or introductory material. The video content is then resized to fit the target resolution (1920x1080) while maintaining aspect ratio - just like image files, videos are letterboxed with black bars if needed to preserve their original proportions.
+
 ## License & Warranty
-- MovieMaker ships under the [MIT License](./LICENSE), which allows personal and commercial use, modification, and redistribution.
+- MontageMaker ships under the [MIT License](./LICENSE), which allows personal and commercial use, modification, and redistribution.
 - The software is provided **as-is** with **no warranty**. Run it at your own risk, make sure you have appropriate ownership of all content, and double-check the generated videos before publishing or sharing them.

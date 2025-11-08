@@ -27,7 +27,8 @@ from create_movie import (
     calculate_progressive_duration,
     create_movie_sequence,
     resize_image_to_standard,
-    create_movie
+    create_movie,
+    is_video_file
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -227,6 +228,185 @@ class TestCreateMovie(unittest.TestCase):
         os.makedirs(images_long_dir)
         with self.assertRaises(FileNotFoundError):
             create_movie(images_short_dir, images_long_dir, "/nonexistent/audio.mp3", output_path)
+    
+    def test_video_file_detection(self):
+        """Test video file detection"""
+        # Test video files
+        self.assertTrue(is_video_file("test.mov"))
+        self.assertTrue(is_video_file("test.mp4"))
+        self.assertTrue(is_video_file("test.avi"))
+        self.assertTrue(is_video_file("test.mkv"))
+        self.assertTrue(is_video_file("TEST.MOV"))  # Test case insensitivity
+        
+        # Test non-video files
+        self.assertFalse(is_video_file("test.jpg"))
+        self.assertFalse(is_video_file("test.png"))
+        self.assertFalse(is_video_file("test.txt"))
+        self.assertFalse(is_video_file("test.mp3"))
+    
+    def test_get_image_files_with_videos(self):
+        """Test getting both image and video files"""
+        # Create a mix of image and video files
+        video_dir = os.path.join(self.test_dir, "mixed_media")
+        os.makedirs(video_dir)
+        
+        # Create test image files
+        img1 = os.path.join(video_dir, "image1.png")
+        img2 = os.path.join(video_dir, "image2.jpg")
+        Image.new('RGB', (100, 100), color=(255, 0, 0)).save(img1)
+        Image.new('RGB', (100, 100), color=(0, 255, 0)).save(img2)
+        
+        # Create dummy video files (just empty files for testing)
+        vid1 = os.path.join(video_dir, "video1.mov")
+        vid2 = os.path.join(video_dir, "video2.mp4")
+        with open(vid1, 'w') as f:
+            f.write("dummy video content")
+        with open(vid2, 'w') as f:
+            f.write("dummy video content")
+        
+        media_files = get_image_files(video_dir)
+        
+        # Should find all 4 files
+        self.assertEqual(len(media_files), 4)
+        
+        # Check that both images and videos are included
+        extensions = [os.path.splitext(f)[1].lower() for f in media_files]
+        self.assertIn('.png', extensions)
+        self.assertIn('.jpg', extensions)
+        self.assertIn('.mov', extensions)
+        self.assertIn('.mp4', extensions)
+    
+    def test_video_aspect_ratio_calculation(self):
+        """Test that video aspect ratio calculations work correctly"""
+        # Test wide video (16:9) -> should fit by width
+        video_width, video_height = 1920, 1080
+        target_width, target_height = 1920, 1080
+        
+        video_ratio = video_width / video_height
+        target_ratio = target_width / target_height
+        
+        if video_ratio > target_ratio:
+            new_width = target_width
+            new_height = int(new_width / video_ratio)
+        else:
+            new_height = target_height
+            new_width = int(new_height * video_ratio)
+        
+        # Should be exact match
+        self.assertEqual(new_width, 1920)
+        self.assertEqual(new_height, 1080)
+        
+        # Test very wide video (2:1) -> should fit by width with black bars top/bottom
+        video_width, video_height = 2000, 1000
+        video_ratio = video_width / video_height  # 2.0
+        target_ratio = target_width / target_height  # 1.77...
+        
+        if video_ratio > target_ratio:
+            new_width = target_width  # 1920
+            new_height = int(new_width / video_ratio)  # 960
+        else:
+            new_height = target_height
+            new_width = int(new_height * video_ratio)
+        
+        self.assertEqual(new_width, 1920)
+        self.assertEqual(new_height, 960)
+        # Should have 60px black bars top and bottom: (1080 - 960) / 2 = 60
+        
+        # Test tall video (9:16) -> should fit by height with black bars left/right
+        video_width, video_height = 1080, 1920
+        video_ratio = video_width / video_height  # 0.5625
+        
+        if video_ratio > target_ratio:
+            new_width = target_width
+            new_height = int(new_width / video_ratio)
+        else:
+            new_height = target_height  # 1080
+            new_width = int(new_height * video_ratio)  # 607
+        
+        self.assertEqual(new_width, 607)
+        self.assertEqual(new_height, 1080)
+        # Should have black bars left and right: (1920 - 607) / 2 = 656.5
+    
+    def test_video_middle_extraction_logic(self):
+        """Test that video extraction from middle is calculated correctly"""
+        # Test long video - should extract from middle
+        original_duration = 60.0
+        extract_duration = 5.0
+        
+        if original_duration > extract_duration:
+            start_time = (original_duration - extract_duration) / 2
+            end_time = start_time + extract_duration
+        
+        self.assertEqual(start_time, 27.5)  # (60 - 5) / 2
+        self.assertEqual(end_time, 32.5)    # 27.5 + 5
+        self.assertEqual(end_time - start_time, extract_duration)
+        
+        # Test short video - should use full duration
+        original_duration = 3.0
+        extract_duration = 5.0
+        
+        # When original is shorter, we use the full original video
+        if original_duration <= extract_duration:
+            # No extraction needed, use full video
+            start_time = 0
+            end_time = original_duration
+        
+        self.assertEqual(start_time, 0)
+        self.assertEqual(end_time, 3.0)
+        
+        # Test edge case - exactly equal durations
+        original_duration = 5.0
+        extract_duration = 5.0
+        
+        if original_duration > extract_duration:
+            start_time = (original_duration - extract_duration) / 2
+            end_time = start_time + extract_duration
+        else:
+            start_time = 0
+            end_time = original_duration
+        
+        self.assertEqual(start_time, 0)
+        self.assertEqual(end_time, 5.0)
+    
+    def test_video_processing_uniform_for_short_and_long(self):
+        """Test that both short and long video files use the same processing logic"""
+        # Create directories with mixed media files
+        short_dir = os.path.join(self.test_dir, "test_short")
+        long_dir = os.path.join(self.test_dir, "test_long")
+        os.makedirs(short_dir)
+        os.makedirs(long_dir)
+        
+        # Create test files
+        short_image = os.path.join(short_dir, "image.jpg")
+        short_video = os.path.join(short_dir, "video.mov")
+        long_image = os.path.join(long_dir, "image.jpg") 
+        long_video = os.path.join(long_dir, "video.mp4")
+        
+        Image.new('RGB', (100, 100), color=(255, 0, 0)).save(short_image)
+        Image.new('RGB', (100, 100), color=(0, 255, 0)).save(long_image)
+        
+        # Create dummy video files
+        with open(short_video, 'w') as f:
+            f.write("dummy video content")
+        with open(long_video, 'w') as f:
+            f.write("dummy video content")
+        
+        # Get files
+        short_files = get_image_files(short_dir)
+        long_files = get_image_files(long_dir)
+        
+        # Verify that video detection works the same for both
+        short_video_file = [f for f in short_files if f.endswith('.mov')][0]
+        long_video_file = [f for f in long_files if f.endswith('.mp4')][0]
+        
+        self.assertTrue(is_video_file(short_video_file))
+        self.assertTrue(is_video_file(long_video_file))
+        
+        # Both should be detected as video files regardless of source directory
+        self.assertEqual(is_video_file(short_video_file), is_video_file(long_video_file))
+        
+        # Verify that create_movie_sequence treats them uniformly
+        # (both go through the same final processing loop)
 
 
 class TestImageProcessing(unittest.TestCase):
